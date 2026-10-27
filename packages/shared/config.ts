@@ -76,6 +76,11 @@ const allEnv = z.object({
   OPENAI_REASONING_EFFORT: z
     .enum(["none", "minimal", "low", "medium", "high", "xhigh"])
     .optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_BASE_URL: z.string().url().optional(),
+  ANTHROPIC_EFFORT: z
+    .enum(["low", "medium", "high", "xhigh", "max"])
+    .default("medium"),
   OLLAMA_BASE_URL: z.string().url().optional(),
   OLLAMA_KEEP_ALIVE: z.string().optional(),
   CHAT_ENABLED: stringBool("false"),
@@ -83,8 +88,8 @@ const allEnv = z.object({
   SEMANTIC_SEARCH_ENABLED: stringBool("true"),
   INFERENCE_JOB_TIMEOUT_SEC: z.coerce.number().default(30),
   INFERENCE_FETCH_TIMEOUT_SEC: z.coerce.number().default(300),
-  INFERENCE_TEXT_MODEL: z.string().default("gpt-6-luna"),
-  INFERENCE_IMAGE_MODEL: z.string().default("gpt-4o-mini"),
+  INFERENCE_TEXT_MODEL: z.string().optional(),
+  INFERENCE_IMAGE_MODEL: z.string().optional(),
   EMBEDDING_ENABLE_AUTO_INDEXING: optionalStringBool(),
   EMBEDDING_OPENAI_API_KEY: z.string().optional(),
   EMBEDDING_OPENAI_BASE_URL: z.string().url().optional(),
@@ -316,6 +321,14 @@ const allEnv = z.object({
 });
 
 const serverConfigSchema = allEnv.transform((val, ctx) => {
+  // Anthropic takes precedence for inference when configured, so the default
+  // models have to follow it.
+  const textModel =
+    val.INFERENCE_TEXT_MODEL ??
+    (val.ANTHROPIC_API_KEY ? "claude-sonnet-5-5" : "gpt-6-luna");
+  const imageModel =
+    val.INFERENCE_IMAGE_MODEL ??
+    (val.ANTHROPIC_API_KEY ? "claude-sonnet-5-5" : "gpt-4o-mini");
   const obj = {
     port: val.PORT,
     workers: {
@@ -368,7 +381,10 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
         : undefined,
     },
     inference: {
-      isConfigured: !!val.OPENAI_API_KEY || !!val.OLLAMA_BASE_URL,
+      isConfigured:
+        !!val.OPENAI_API_KEY ||
+        !!val.ANTHROPIC_API_KEY ||
+        !!val.OLLAMA_BASE_URL,
       numWorkers: val.INFERENCE_NUM_WORKERS,
       jobTimeoutSec: val.INFERENCE_JOB_TIMEOUT_SEC,
       fetchTimeoutSec: val.INFERENCE_FETCH_TIMEOUT_SEC,
@@ -378,11 +394,14 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
       openAITimeoutSec: val.OPENAI_TIMEOUT_SEC,
       openAIServiceTier: val.OPENAI_SERVICE_TIER,
       openAIReasoningEffort: val.OPENAI_REASONING_EFFORT,
+      anthropicApiKey: val.ANTHROPIC_API_KEY,
+      anthropicBaseUrl: val.ANTHROPIC_BASE_URL,
+      anthropicEffort: val.ANTHROPIC_EFFORT,
       ollamaBaseUrl: val.OLLAMA_BASE_URL,
       ollamaKeepAlive: val.OLLAMA_KEEP_ALIVE,
-      chatModel: val.CHAT_MODEL ?? val.INFERENCE_TEXT_MODEL,
-      textModel: val.INFERENCE_TEXT_MODEL,
-      imageModel: val.INFERENCE_IMAGE_MODEL,
+      chatModel: val.CHAT_MODEL ?? textModel,
+      textModel,
+      imageModel,
       inferredTagLang: val.INFERENCE_LANG,
       contextLength: val.INFERENCE_CONTEXT_LENGTH,
       maxOutputTokens: val.INFERENCE_MAX_OUTPUT_TOKENS,
