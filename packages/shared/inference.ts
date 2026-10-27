@@ -1,3 +1,5 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { Ollama } from "ollama";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
@@ -209,6 +211,10 @@ const buildOpenAIClient = (config: OpenAIEmbeddingConfig) =>
 
 export class InferenceClientFactory {
   static build(): InferenceClient | null {
+    if (serverConfig.inference.anthropicApiKey) {
+      return AnthropicInferenceClient.fromConfig();
+    }
+
     if (serverConfig.inference.openAIApiKey) {
       return OpenAIInferenceClient.fromConfig();
     }
@@ -245,7 +251,16 @@ export class EmbeddingClientFactory {
       });
     }
 
-    return InferenceClientFactory.build();
+    // Anthropic has no embeddings API, so embeddings never go through the
+    // inference client factory.
+    if (serverConfig.inference.openAIApiKey) {
+      return OpenAIInferenceClient.fromConfig();
+    }
+
+    if (serverConfig.inference.ollamaBaseUrl) {
+      return OllamaInferenceClient.fromConfig();
+    }
+    return null;
   }
 }
 
@@ -408,6 +423,157 @@ export class OpenAIInferenceClient implements InferenceClient {
     validateEmbeddingDimensions(embedding2D);
     const usage = parseEmbeddingUsage(embedResponse);
     return { embeddings: embedding2D, ...usage };
+  }
+}
+
+export interface AnthropicInferenceConfig {
+  apiKey: string;
+  baseURL?: string;
+  textModel: string;
+  imageModel: string;
+  maxOutputTokens: number;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  outputSchema: "structured" | "json" | "plain";
+}
+
+type AnthropicImageMediaType = Anthropic.Base64ImageSource["media_type"];
+
+const ANTHROPIC_IMAGE_MEDIA_TYPES: readonly AnthropicImageMediaType[] = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
+export class AnthropicInferenceClient implements InferenceClient {
+  anthropic: Anthropic;
+  private config: AnthropicInferenceConfig;
+
+  constructor(config: AnthropicInferenceConfig) {
+    this.config = config;
+    this.anthropic = new Anthropic({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+    });
+  }
+
+  static fromConfig(): AnthropicInferenceClient {
+    return new AnthropicInferenceClient({
+      apiKey: serverConfig.inference.anthropicApiKey!,
+      baseURL: serverConfig.inference.anthropicBaseUrl,
+      textModel: serverConfig.inference.textModel,
+      imageModel: serverConfig.inference.imageModel,
+      maxOutputTokens: serverConfig.inference.maxOutputTokens,
+      effort: serverConfig.inference.anthropicEffort,
+      outputSchema: serverConfig.inference.outputSchema,
+    });
+  }
+
+  private async runModel(
+    model: string,
+    content: Anthropic.ContentBlockParam[],
+    _opts: Partial<InferenceOptions>,
+  ): Promise<InferenceResponse> {
+    const optsWithDefaults: InferenceOptions = {
+      ...defaultInferenceOptions,
+      ..._opts,
+    };
+    // Anthropic has no plain JSON mode, so only "structured" constrains the
+    // output. With "json" we rely on the prompt asking for JSON.
+    const format =
+      optsWithDefaults.schema && this.config.outputSchema === "structured"
+        ? zodOutputFormat(optsWithDefaults.schema)
+        : undefined;
+    const message = await this.anthropic.messages.create(
+      {
+        model,
+        max_tokens: this.config.maxOutputTokens,
+        messages: [{ role: "user", content }],
+        ...(format || this.config.effort
+          ? {
+              output_config: {
+                ...(format ? { format } : {}),
+                ...(this.config.effort ? { effort: this.config.effort } : {}),
+              },
+            }
+          : {}),
+      },
+      {
+        signal: optsWithDefaults.abortSignal,
+      },
+    );
+
+    if (message.stop_reason === "refusal") {
+      throw new Error(
+        `Anthropic declined the request (category: ${message.stop_details?.category ?? "unknown"})`,
+      );
+    }
+    const response = message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    if (!response) {
+      throw new Error(
+        message.stop_reason === "max_tokens"
+          ? `Got no message content from Anthropic before hitting max tokens, consider increasing INFERENCE_MAX_OUTPUT_TOKENS`
+          : `Got no message content from Anthropic`,
+      );
+    }
+    return {
+      response,
+      totalTokens: message.usage.input_tokens + message.usage.output_tokens,
+    };
+  }
+
+  async inferFromText(
+    prompt: string,
+    opts: Partial<InferenceOptions>,
+  ): Promise<InferenceResponse> {
+    return await this.runModel(
+      this.config.textModel,
+      [{ type: "text", text: prompt }],
+      opts,
+    );
+  }
+
+  async inferFromImage(
+    prompt: string,
+    contentType: string,
+    image: string,
+    opts: Partial<InferenceOptions>,
+  ): Promise<InferenceResponse> {
+    if (
+      !ANTHROPIC_IMAGE_MEDIA_TYPES.includes(
+        contentType as AnthropicImageMediaType,
+      )
+    ) {
+      throw new Error(
+        `Anthropic does not support images of type ${contentType}`,
+      );
+    }
+    return await this.runModel(
+      this.config.imageModel,
+      [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: contentType as AnthropicImageMediaType,
+            data: image,
+          },
+        },
+        { type: "text", text: prompt },
+      ],
+      opts,
+    );
+  }
+
+  generateEmbeddingFromText(_inputs: string[]): Promise<EmbeddingResponse> {
+    return Promise.reject(
+      new Error(
+        "Anthropic does not provide embeddings. Configure an OpenAI-compatible or Ollama embedding provider instead.",
+      ),
+    );
   }
 }
 

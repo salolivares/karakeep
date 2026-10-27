@@ -1,6 +1,6 @@
 # Configuring different AI Providers
 
-Karakeep uses LLM providers for AI tagging and summarization. It also uses embedding models for stuff like semantic search. We support OpenAI-compatible providers and ollama. This guide will show you how to configure different providers.
+Karakeep uses LLM providers for AI tagging and summarization. It also uses embedding models for stuff like semantic search. We support OpenAI-compatible providers, Anthropic and ollama. This guide will show you how to configure different providers.
 
 ## Tagging and Summarization Models
 
@@ -19,6 +19,22 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # EMBEDDING_TEXT_MODEL_DIMENSION_OVERRIDE=1536
 ```
 
+### Anthropic
+
+To use Claude models for tagging and summarization, pass in the `ANTHROPIC_API_KEY` environment variable. When it's set, Anthropic is used for inference even if `OPENAI_API_KEY` is also set.
+
+```
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# The models default to claude-sonnet-5-5 at medium effort. You can change them by uncommenting the following lines:
+# INFERENCE_TEXT_MODEL=claude-haiku-5-5
+# INFERENCE_IMAGE_MODEL=claude-haiku-5-5
+# ANTHROPIC_EFFORT=low
+```
+
+Anthropic doesn't offer embedding models. If you want semantic search, also configure an OpenAI-compatible or Ollama embedding provider (see [Embedding Models](#embedding-models)). For example, setting `OPENAI_API_KEY` alongside `ANTHROPIC_API_KEY` uses Claude for tagging and OpenAI for embeddings.
+
+Claude models think before answering, and that thinking counts towards `INFERENCE_MAX_OUTPUT_TOKENS`. If you see errors about hitting max tokens, raise it or lower `ANTHROPIC_EFFORT`.
 
 ### Ollama
 
