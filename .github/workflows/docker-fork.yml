@@ -1,0 +1,49 @@
+name: Build and Push Fork Docker Image
+
+# Fork-only replacement for docker.yml, which pushes to the upstream
+# registries. Builds the all-in-one image for amd64 and pushes it to this
+# fork's own package, using the built-in GITHUB_TOKEN.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: github.repository == 'salolivares/karakeep'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to Github Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Overrides the upstream tags and registry cache, which point at
+      # ghcr.io/karakeep-app and can't be written from this fork.
+      - name: Build image
+        uses: docker/bake-action@3acf805d94d93a86cce4ca44798a76464a75b88c # v6.9.0
+        env:
+          ARCH: amd64
+          SERVER_VERSION: nightly
+        with:
+          source: .
+          files: docker/docker-bake.hcl
+          targets: aio
+          push: true
+          set: |
+            aio.tags=ghcr.io/salolivares/karakeep:latest
+            aio.cache-from=type=gha,scope=aio-amd64
+            aio.cache-to=type=gha,mode=max,scope=aio-amd64
